@@ -2,7 +2,7 @@ import { pipeline, Readable, Transform, TransformCallback } from 'node:stream';
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
 import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior } from "@discordjs/voice";
 import { config as configDotEnv } from "dotenv";
-import AudioMixer from 'audio-mixer';
+import AudioMixer, { MixerArguments } from 'audio-mixer';
 import DiscordOpus from '@discordjs/opus';
 
 configDotEnv();
@@ -18,21 +18,21 @@ client.on("ready", () => {
 client.on("messageCreate", (message) => {
   // if(message.author.id != "501819491764666386") return;
 
-  const { guild } = message;
+  const { guild, member, channel } = message;
 
   if (!guild) {
     return;
   }
 
-  if (!message.member) {
+  if (!member) {
     return;
   }
 
-  if (message.channel.type !== ChannelType.GuildText) {
+  if (channel.type !== ChannelType.GuildText) {
     return;
   }
 
-  const voicechannel = message.member.voice.channel;
+  const voicechannel = member.voice.channel;
 
   if (!voicechannel) {
     return;
@@ -62,7 +62,7 @@ client.on("messageCreate", (message) => {
   // });
 
   let mixer = new AudioMixer.Mixer(
-    { channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 } as AudioMixer.MixerArguments
+    { channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 } as MixerArguments
   );
 
   for (const user of receiver.speaking.users.keys()) {
@@ -80,14 +80,14 @@ client.on("messageCreate", (message) => {
     playStream(user);
   });
 
+  const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
+    const newUdp = Reflect.get(newNetworkState, 'udp');
+    clearInterval(newUdp?.keepAliveInterval);
+  }  
+
   connection.on('stateChange', (oldState, newState) => {
     const oldNetworking = Reflect.get(oldState, 'networking');
     const newNetworking = Reflect.get(newState, 'networking');
-
-    const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
-      const newUdp = Reflect.get(newNetworkState, 'udp');
-      clearInterval(newUdp?.keepAliveInterval);
-    }
 
     oldNetworking?.off('stateChange', networkStateChangeHandler);
     newNetworking?.on('stateChange', networkStateChangeHandler);
