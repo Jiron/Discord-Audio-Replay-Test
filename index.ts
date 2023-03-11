@@ -1,8 +1,9 @@
-import { pipeline, Readable, Transform, TransformCallback } from 'node:stream';
+import { PassThrough, pipeline, Readable, Transform, TransformCallback, Writable } from 'node:stream';
+import { createWriteStream } from 'fs';
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
-import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection } from "@discordjs/voice";
+import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection, VoiceReceiver } from "@discordjs/voice";
 import { config as configDotEnv } from "dotenv";
-import AudioMixer, { MixerArguments } from 'audio-mixer';
+import { Mixer, MixerArguments, Input as ChannelStrip } from 'audio-mixer';
 import DiscordOpus from '@discordjs/opus';
 
 configDotEnv();
@@ -16,6 +17,8 @@ client.on("ready", () => {
 });
 
 let connection: VoiceConnection | undefined = undefined;
+
+const speakingUsers = new Set<string>();
 
 client.on("messageCreate", (message) => {
   // if(message.author.id != "501819491764666386") return;
@@ -48,49 +51,82 @@ client.on("messageCreate", (message) => {
     connection.destroy();
   }
 
-  connection = joinVoiceChannel({
+  connection = patchVoiceConnection(joinVoiceChannel({
     channelId: voiceChannel.id,
     guildId: guild.id,
     adapterCreator: guild.voiceAdapterCreator,
     selfDeaf: false,
     selfMute: false
-  });
+  }));
 
-  let receiver = connection.receiver;
-  const speakingUsers = new Set<string>();
-
-  // const vcMembers = voicechannel.members.filter(m => !m.user.bot).map(member => {
-  //     return {
-  //         username: member.user.username,
-  //         profilePictureURL: member.user.avatarURL(),
-  //         discriminator: member.user.discriminator
-  //     }
-  // });
-
-  let mixer = new AudioMixer.Mixer(
-    { channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 } as MixerArguments
+  const mixer = new Mixer(
+    {
+      channels: 2,
+      bitDepth: 16,
+      sampleRate: 48000,
+      clearInterval: 250
+    } as MixerArguments
   );
 
-  for (const user of receiver.speaking.users.keys()) {
-    if (!speakingUsers.has(user)) {
-      playStream(user);
+  const mixerOutput = pipeline(
+    mixer,
+    new DumpStream(createWriteStream('mixed.pcm')),
+    () => void 0
+  )
+
+  const audioPlayer = createAudioPlayer({
+    behaviors: {
+      maxMissedFrames: 1000,
+      noSubscriber: NoSubscriberBehavior.Play
     }
-
-  }
-
-  receiver.speaking.on("start", (user) => {
-    if (speakingUsers.has(user)) {
-      return;
-    }
-
-    playStream(user);
   });
 
-  const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
-    const newUdp = Reflect.get(newNetworkState, 'udp');
-    clearInterval(newUdp?.keepAliveInterval);
-  }  
+  const { receiver } = connection;
 
+  const play = (userId: string) => mixStream(userId, receiver, mixer);
+
+  speakingUsers.clear();
+  Array.from(receiver.speaking.users.keys()).map(play);
+  receiver.speaking.on("start", play);
+
+  audioPlayer.play(createAudioResource(mixerOutput, { inputType: StreamType.Raw }));
+  connection.subscribe(audioPlayer);
+});
+
+function mixStream(userId: string, receiver: VoiceReceiver, mixer: Mixer) {
+  if (speakingUsers.has(userId)) {
+    return;
+  }
+
+  speakingUsers.add(userId);
+
+  const receiverStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 100 } });
+
+  // input pipeline
+  const input = pipeline(
+    receiverStream,
+    new OpusDecoderStream(new DiscordOpus.OpusEncoder(48000, 2)),
+    new DumpStream(createWriteStream(`user-${userId}.pcm`)),
+    new BufferedStream(2),
+    mixer.input({ volume: 75 }),
+    () => void 0
+  );
+
+  receiverStream.once("end", () => {
+    receiverStream.destroy();
+    mixer.removeInput(input);
+    speakingUsers.delete(userId);
+  });
+}
+
+client.login(process.env.TOKEN);
+
+const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
+  const newUdp = Reflect.get(newNetworkState, 'udp');
+  clearInterval(newUdp?.keepAliveInterval);
+}
+
+function patchVoiceConnection(connection: VoiceConnection): VoiceConnection {
   connection.on('stateChange', (oldState, newState) => {
     const oldNetworking = Reflect.get(oldState, 'networking');
     const newNetworking = Reflect.get(newState, 'networking');
@@ -99,53 +135,8 @@ client.on("messageCreate", (message) => {
     newNetworking?.on('stateChange', networkStateChangeHandler);
   });
 
-  initAudioPlayer();
-
-  function playStream(userId: string) {
-    if (speakingUsers.has(userId)) {
-      return;
-    }
-
-    speakingUsers.add(userId);
-
-    const audioStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterInactivity, duration: 100 } });
-
-    const input = pipeline(
-      new BufferedStream(2),
-      mixer.input({ volume: 75 }),
-      () => void 0
-    );
-
-    pipeline(
-      audioStream,
-      new OpusDecoderStream(new DiscordOpus.OpusEncoder(48000, 2)),
-      new BufferedStream(4), input,
-      () => void 0
-    );
-
-    audioStream.once("end", () => {
-      console.log('userId', userId, 'end');
-
-      audioStream.destroy();
-      mixer.removeInput(input);
-      speakingUsers.delete(userId);
-    });
-  }
-
-  function initAudioPlayer() {
-    const audioPlayer = createAudioPlayer({
-      behaviors: {
-        maxMissedFrames: 1000,
-        noSubscriber: NoSubscriberBehavior.Play
-      }
-    });
-    connection?.subscribe(audioPlayer);
-    const resource = createAudioResource(mixer as unknown as Readable, { inputType: StreamType.Raw });
-    audioPlayer.play(resource);
-  }
-});
-
-client.login(process.env.TOKEN);
+  return connection;
+}
 
 class OpusDecoderStream extends Transform {
   constructor(private opus: DiscordOpus.OpusEncoder) {
@@ -175,6 +166,18 @@ class BufferedStream extends Transform {
       this.push(this.blocks.shift());
     }
 
+    done();
+  }
+}
+
+class DumpStream extends Transform {
+  constructor(private dumpTo: Writable) {
+    super();
+  }
+
+  _transform(pcm: Buffer, encoding: BufferEncoding, done: TransformCallback) {
+    this.push(pcm);
+    this.dumpTo.write(pcm);
     done();
   }
 }
