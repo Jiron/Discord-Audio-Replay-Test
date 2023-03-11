@@ -171,7 +171,7 @@ class BufferedStream extends Transform {
   _transform(pcm: Buffer, encoding: BufferEncoding, done: TransformCallback) {
     this.blocks.push(pcm);
 
-    while (this.blocks.length >= this.numBlocks) {
+    while (this.blocks.length && this.blocks.length >= this.numBlocks) {
       this.push(this.blocks.shift());
     }
 
