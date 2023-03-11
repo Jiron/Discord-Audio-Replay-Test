@@ -8,167 +8,167 @@ import DiscordOpus from '@discordjs/opus';
 configDotEnv();
 
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates],
 });
 
 client.on("ready", () => {
-    console.log(`the bot is online!`);
+  console.log(`the bot is online!`);
 });
 
 client.on("messageCreate", (message) => {
-    // if(message.author.id != "501819491764666386") return;
+  // if(message.author.id != "501819491764666386") return;
 
-    const { guild } = message;
+  const { guild } = message;
 
-    if (!guild) {
-        return;
+  if (!guild) {
+    return;
+  }
+
+  if (!message.member) {
+    return;
+  }
+
+  if (message.channel.type !== ChannelType.GuildText) {
+    return;
+  }
+
+  const voicechannel = message.member.voice.channel;
+
+  if (!voicechannel) {
+    return;
+  }
+
+  if (message.content !== '!join') {
+    return;
+  }
+
+  const connection = joinVoiceChannel({
+    channelId: voicechannel.id,
+    guildId: guild.id,
+    adapterCreator: guild.voiceAdapterCreator,
+    selfDeaf: false,
+    selfMute: false
+  });
+
+  let receiver = connection.receiver;
+  const speakingUsers = new Set<string>();
+
+  // const vcMembers = voicechannel.members.filter(m => !m.user.bot).map(member => {
+  //     return {
+  //         username: member.user.username,
+  //         profilePictureURL: member.user.avatarURL(),
+  //         discriminator: member.user.discriminator
+  //     }
+  // });
+
+  let mixer = new AudioMixer.Mixer(
+    { channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 } as AudioMixer.MixerArguments
+  );
+
+  for (const user of receiver.speaking.users.keys()) {
+    if (!speakingUsers.has(user)) {
+      playStream(user);
     }
 
-    if (!message.member) {
-        return;
+  }
+
+  receiver.speaking.on("start", (user) => {
+    if (speakingUsers.has(user)) {
+      return;
     }
 
-    if (message.channel.type !== ChannelType.GuildText) {
-        return;
+    playStream(user);
+  });
+
+  connection.on('stateChange', (oldState, newState) => {
+    const oldNetworking = Reflect.get(oldState, 'networking');
+    const newNetworking = Reflect.get(newState, 'networking');
+
+    const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
+      const newUdp = Reflect.get(newNetworkState, 'udp');
+      clearInterval(newUdp?.keepAliveInterval);
     }
 
-    const voicechannel = message.member.voice.channel;
+    oldNetworking?.off('stateChange', networkStateChangeHandler);
+    newNetworking?.on('stateChange', networkStateChangeHandler);
+  });
 
-    if (!voicechannel) {    
-        return;
+  initAudioPlayer();
+
+  function playStream(userId: string) {
+    if (speakingUsers.has(userId)) {
+      return;
     }
 
-    if (message.content !== '!join') {
-        return;
-    }
+    speakingUsers.add(userId);
 
-    const connection = joinVoiceChannel({
-        channelId: voicechannel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: false
-    });
+    const audioStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterInactivity, duration: 100 } });
 
-    let receiver = connection.receiver;
-    const speakingUsers = new Set<string>();
-
-    // const vcMembers = voicechannel.members.filter(m => !m.user.bot).map(member => {
-    //     return {
-    //         username: member.user.username,
-    //         profilePictureURL: member.user.avatarURL(),
-    //         discriminator: member.user.discriminator
-    //     }
-    // });
-
-    let mixer = new AudioMixer.Mixer(
-        { channels: 2, bitDepth: 16, sampleRate: 48000, clearInterval: 250 } as AudioMixer.MixerArguments
+    const input = pipeline(
+      new BufferedStream(2),
+      mixer.input({ volume: 75 }),
+      () => void 0
     );
 
-    for (const user of receiver.speaking.users.keys()) {
-        if (!speakingUsers.has(user)) {
-            playStream(user);
-        }
-        
-    }
+    pipeline(
+      audioStream,
+      new OpusDecoderStream(new DiscordOpus.OpusEncoder(48000, 2)),
+      new BufferedStream(4), input,
+      () => void 0
+    );
 
-    receiver.speaking.on("start", (user) => {
-        if (speakingUsers.has(user)) {
-            return;
-        }
+    audioStream.once("end", () => {
+      console.log('userId', userId, 'end');
 
-        playStream(user);
+      audioStream.destroy();
+      mixer.removeInput(input);
+      speakingUsers.delete(userId);
     });
+  }
 
-    connection.on('stateChange', (oldState, newState) => {
-        const oldNetworking = Reflect.get(oldState, 'networking');
-        const newNetworking = Reflect.get(newState, 'networking');
-
-        const networkStateChangeHandler = (oldNetworkState: any, newNetworkState: any) => {
-            const newUdp = Reflect.get(newNetworkState, 'udp');
-            clearInterval(newUdp?.keepAliveInterval);
-        }
-
-        oldNetworking?.off('stateChange', networkStateChangeHandler);
-        newNetworking?.on('stateChange', networkStateChangeHandler);
+  function initAudioPlayer() {
+    const audioPlayer = createAudioPlayer({
+      behaviors: {
+        maxMissedFrames: 1000,
+        noSubscriber: NoSubscriberBehavior.Play
+      }
     });
-
-    initAudioPlayer();
-
-    function playStream(userId: string) {
-        if (speakingUsers.has(userId)) {
-            return;
-        }
-
-        speakingUsers.add(userId);
-        
-        const audioStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterInactivity, duration: 100 } });
-
-        const input = pipeline(
-            new BufferedStream(2),
-            mixer.input({ volume: 75 }),
-            () => void 0
-        );        
-
-        pipeline(
-            audioStream, 
-            new OpusDecoderStream(new DiscordOpus.OpusEncoder(48000, 2)), 
-            new BufferedStream(4), input, 
-            () => void 0
-        );
-
-        audioStream.once("end", () => {
-            console.log('userId', userId, 'end');
-
-            audioStream.destroy();
-            mixer.removeInput(input);
-            speakingUsers.delete(userId);
-        });
-    }
-
-    function initAudioPlayer() {
-        const audioPlayer = createAudioPlayer({
-            behaviors: {
-                maxMissedFrames: 1000,
-                noSubscriber: NoSubscriberBehavior.Play
-            }
-        });
-        connection?.subscribe(audioPlayer);
-        const resource = createAudioResource(mixer as unknown as Readable, { inputType: StreamType.Raw });
-        audioPlayer.play(resource);
-    }
+    connection?.subscribe(audioPlayer);
+    const resource = createAudioResource(mixer as unknown as Readable, { inputType: StreamType.Raw });
+    audioPlayer.play(resource);
+  }
 });
 
 client.login(process.env.TOKEN);
 
 class OpusDecoderStream extends Transform {
-    constructor(private opus: DiscordOpus.OpusEncoder) {
-        super({
-            writableObjectMode: true,
-            readableObjectMode: false
-        });
-    }
+  constructor(private opus: DiscordOpus.OpusEncoder) {
+    super({
+      writableObjectMode: true,
+      readableObjectMode: false
+    });
+  }
 
-    _transform(opusPacket: Buffer, encoding: BufferEncoding, done: TransformCallback) {
-        this.push(this.opus.decode(opusPacket));
-        done();
-    }
+  _transform(opusPacket: Buffer, encoding: BufferEncoding, done: TransformCallback) {
+    this.push(this.opus.decode(opusPacket));
+    done();
+  }
 }
 
 class BufferedStream extends Transform {
-    private blocks: Buffer[] = [];
+  private blocks: Buffer[] = [];
 
-    constructor(private numBlocks: number) {
-        super();        
+  constructor(private numBlocks: number) {
+    super();
+  }
+
+  _transform(pcm: Buffer, encoding: BufferEncoding, done: TransformCallback) {
+    this.blocks.push(pcm);
+
+    while (this.blocks.length >= this.numBlocks) {
+      this.push(this.blocks.shift());
     }
 
-    _transform(pcm: Buffer, encoding: BufferEncoding, done: TransformCallback) {
-        this.blocks.push(pcm);
-
-        while (this.blocks.length >= this.numBlocks) {
-            this.push(this.blocks.shift());
-        }
-
-        done();
-    }
+    done();
+  }
 }
