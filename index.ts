@@ -3,7 +3,7 @@ import { createWriteStream } from 'fs';
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
 import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection, VoiceReceiver } from "@discordjs/voice";
 import { config as configDotEnv } from "dotenv";
-import { Mixer, MixerArguments, Input as ChannelStrip } from 'audio-mixer';
+import { Mixer, MixerArguments } from 'audio-mixer';
 import DiscordOpus from '@discordjs/opus';
 
 configDotEnv();
