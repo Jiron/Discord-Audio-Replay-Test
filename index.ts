@@ -1,6 +1,6 @@
 import { pipeline, Readable, Transform, TransformCallback } from 'node:stream';
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
-import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior } from "@discordjs/voice";
+import { joinVoiceChannel, EndBehaviorType, StreamType, createAudioPlayer, createAudioResource, NoSubscriberBehavior, VoiceConnection } from "@discordjs/voice";
 import { config as configDotEnv } from "dotenv";
 import AudioMixer, { MixerArguments } from 'audio-mixer';
 import DiscordOpus from '@discordjs/opus';
@@ -14,6 +14,8 @@ const client = new Client({
 client.on("ready", () => {
   console.log(`the bot is online!`);
 });
+
+let connection: VoiceConnection | undefined = undefined;
 
 client.on("messageCreate", (message) => {
   // if(message.author.id != "501819491764666386") return;
@@ -32,9 +34,9 @@ client.on("messageCreate", (message) => {
     return;
   }
 
-  const voicechannel = member.voice.channel;
+  const voiceChannel = member.voice.channel;
 
-  if (!voicechannel) {
+  if (!voiceChannel) {
     return;
   }
 
@@ -42,8 +44,12 @@ client.on("messageCreate", (message) => {
     return;
   }
 
-  const connection = joinVoiceChannel({
-    channelId: voicechannel.id,
+  if (connection && connection.joinConfig.channelId !== voiceChannel.id) {
+    connection.destroy();
+  }
+
+  connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
     guildId: guild.id,
     adapterCreator: guild.voiceAdapterCreator,
     selfDeaf: false,
