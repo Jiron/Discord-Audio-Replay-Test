@@ -70,7 +70,7 @@ client.on("messageCreate", (message) => {
 
   const mixerOutput = pipeline(
     mixer,
-    new DumpStream(createWriteStream('mixed.pcm')),
+    process.env.DUMP_STREAM ? new DumpStream(createWriteStream('mixed.pcm')) : new PassThrough(),
     () => void 0
   )
 
@@ -106,7 +106,8 @@ function mixStream(userId: string, receiver: VoiceReceiver, mixer: Mixer) {
   const input = pipeline(
     receiverStream,
     new OpusDecoderStream(new DiscordOpus.OpusEncoder(48000, 2)),
-    new DumpStream(createWriteStream(`user-${userId}.pcm`)),
+    // TODO: This only dump the last speaking for a user
+    process.env.DUMP_STREAM ? new DumpStream(createWriteStream(`user-${userId}.pcm`)) : new PassThrough(),
     new BufferedStream(2),
     mixer.input({ volume: 75 }),
     () => void 0
