@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "tsx index.ts"
+    "start": "tsx index.ts",
+    "build": "tsc"
   },
   "repository": {
     "type": "git",
@@ -27,7 +28,6 @@
     "socket.io": "^4.6.1",
     "tweetnacl": "^1.0.3"
   },
-  "type": "module",
   "devDependencies": {
     "@types/node": "^18.15.0",
     "tsx": "^3.12.3",
